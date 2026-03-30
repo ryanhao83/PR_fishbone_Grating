@@ -70,11 +70,11 @@ geometry.append(mp.Block(size=mp.Vector3(w1, h1, t_slab), center=mp.Vector3(0, -
 # ==========================================
 # 设置布里渊区积分路径 (对应图3a的 x 轴范围: 0.36 到 0.5)
 # mp.interpolate 会在两点之间插入 50 个点
-k_points = mp.interpolate(50, [mp.Vector3(0.36, 0, 0), mp.Vector3(0.5, 0, 0)])
+k_points = mp.interpolate(5, [mp.Vector3(0.36, 0, 0), mp.Vector3(0.5, 0, 0)])
 
 # 这种极宽的结构支持大量模式，带隙或平缓的慢光模式可能不在基模
-# 建议先计算前 5 个模式，之后根据电场分布挑选匹配的模式
-num_bands = 5 
+# 建议先计算前 8 个模式，之后根据电场分布挑选匹配的模式
+num_bands = 18 
 resolution = 16 # 空间分辨率，若要发表级别精度可调高至 32 或更高
 
 ms = mpb.ModeSolver(
@@ -108,6 +108,19 @@ ng = 1.0 / df_dk
 # 计算对应的物理波长 (nm)
 wavelengths = a_nm / f_band
 
+eps = ms.get_epsilon()
+slide_z = int(eps.shape[2]/2)
+eps_slide_z = eps[..., slide_z].T
+
+fig0, ax = plt.subplots(figsize=(8, 6))
+ax.imshow(eps_slide_z, extent=[-0.5, 0.5, -sy/2, sy/2], cmap='gray')
+ax.set_xlabel('x (a)')
+ax.set_ylabel('y (a)')
+ax.set_title('Cross-sectional Geometry (Epsilon Distribution)')
+plt.savefig('fishbone_geometry.png', dpi=300)
+plt.show()
+plt.close(fig0)
+
 # 开始绘制图表
 fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
@@ -124,7 +137,7 @@ light_line = k_x / 1.44
 ax1.fill_between(k_x, light_line, 1.0, color='gray', alpha=0.3, label='Light Cone')
 
 # 强制限制 Y 轴的显示范围，使其与原论文图 3a 一致
-ax1.set_ylim([0.25, 0.28]) 
+#ax1.set_ylim([0.25, 0.28]) 
 ax1.grid(True)
 ax1.legend()
 
@@ -142,4 +155,5 @@ ax2.set_ylim([0, 160])
 ax2.grid(True)
 
 plt.tight_layout()
+plt.savefig('fishbone_band_and_ng.png', dpi=300)
 plt.show()
