@@ -74,7 +74,7 @@ k_points = mp.interpolate(5, [mp.Vector3(0.36, 0, 0), mp.Vector3(0.5, 0, 0)])
 
 # 这种极宽的结构支持大量模式，带隙或平缓的慢光模式可能不在基模
 # 建议先计算前 8 个模式，之后根据电场分布挑选匹配的模式
-num_bands = 18 
+num_bands = 10 
 resolution = 16 # 空间分辨率，若要发表级别精度可调高至 32 或更高
 
 ms = mpb.ModeSolver(
@@ -112,20 +112,16 @@ eps = ms.get_epsilon()
 slide_z = int(eps.shape[2]/2)
 eps_slide_z = eps[..., slide_z].T
 
-fig0, ax = plt.subplots(figsize=(8, 6))
+
+# 开始绘制图表
+fig, (ax, ax1, ax2) = plt.subplots(1, 3, figsize=(18, 5))
 ax.imshow(eps_slide_z, extent=[-0.5, 0.5, -sy/2, sy/2], cmap='gray')
 ax.set_xlabel('x (a)')
 ax.set_ylabel('y (a)')
 ax.set_title('Cross-sectional Geometry (Epsilon Distribution)')
-plt.savefig('fishbone_geometry.png', dpi=300)
-plt.show()
-plt.close(fig0)
-
-# 开始绘制图表
-fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
 
 # --- 图 (a): 能带图 (Band Diagram) ---
-ax1.plot(k_x, f_band, 'r.-', label=f'Band {target_band}')
+ax1.plot(k_x, freqs, 'r.-', label=f'Band {target_band}')
 ax1.set_xlabel('Wave vector ($2\pi/a$)')
 ax1.set_ylabel('Normalized frequency ($a/\lambda$)')
 ax1.set_title('(a) Band Diagram')
@@ -137,7 +133,7 @@ light_line = k_x / 1.44
 ax1.fill_between(k_x, light_line, 1.0, color='gray', alpha=0.3, label='Light Cone')
 
 # 强制限制 Y 轴的显示范围，使其与原论文图 3a 一致
-#ax1.set_ylim([0.25, 0.28]) 
+ax1.set_ylim([0.25, 0.28]) 
 ax1.grid(True)
 ax1.legend()
 
