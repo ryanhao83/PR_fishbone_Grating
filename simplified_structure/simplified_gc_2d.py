@@ -343,81 +343,86 @@ def compute_ng(f_band, k_x, a_nm):
     return ng, wl
 
 
-def compute_slow_light_bandwidth(ng, wavelengths, ng_lo=NG_LOW, ng_hi=NG_HIGH):
-    """Return the largest contiguous bandwidth (nm) where ng_lo <= ng <= ng_hi.
+def find_flat_ng_region(ng, wavelengths, delta_ng=1.0, min_points=3,
+                        ng_min_threshold=2.0):
+    """Find the widest wavelength region where ng is approximately flat.
 
-    Uses linear interpolation at crossing points for sub-sample accuracy.
-    Returns 0.0 if ng never enters [ng_lo, ng_hi].
+    For band-edge (U-shaped) ng curves, the useful slow-light bandwidth
+    is the flat bottom/plateau, NOT where ng crosses a threshold on the
+    steep sides. We find the widest contiguous wavelength window where
+    max(ng) - min(ng) <= delta_ng.
+
+    Parameters
+    ----------
+    ng : array-like
+        Group index values.
+    wavelengths : array-like
+        Corresponding wavelengths (nm).
+    delta_ng : float
+        Maximum allowed ng variation within the flat region.
+    min_points : int
+        Minimum number of data points for a valid region.
+    ng_min_threshold : float
+        Minimum ng value to be considered slow light (default 2.0).
+
+    Returns
+    -------
+    dict: bw, ng_mean, ng_min, ng_max, wl_center, wl_range
     """
-    # Sort by wavelength
-    order = np.argsort(wavelengths)
-    wl = wavelengths[order]
-    g  = ng[order]
+    ng = np.asarray(ng, dtype=float)
+    wavelengths = np.asarray(wavelengths, dtype=float)
 
-    # Replace non-finite with NaN
-    g = np.where(np.isfinite(g), g, np.nan)
+    valid = np.isfinite(ng) & np.isfinite(wavelengths) & (ng > ng_min_threshold)
+    if np.sum(valid) < min_points:
+        return dict(bw=0.0, ng_mean=np.nan, ng_min=np.nan, ng_max=np.nan,
+                    wl_center=np.nan, wl_range=(np.nan, np.nan))
 
-    in_range = (g >= ng_lo) & (g <= ng_hi)
-    if not np.any(in_range):
-        return 0.0
-
-    def interp_cross(wl_a, wl_b, g_a, g_b, threshold):
-        """Linear interpolation of crossing wavelength."""
-        if not (np.isfinite(g_a) and np.isfinite(g_b)):
-            return None
-        if abs(g_b - g_a) < 1e-12:
-            return None
-        t = (threshold - g_a) / (g_b - g_a)
-        if 0.0 <= t <= 1.0:
-            return wl_a + t * (wl_b - wl_a)
-        return None
-
-    max_bw = 0.0
+    order = np.argsort(wavelengths[valid])
+    wl = wavelengths[valid][order]
+    g = ng[valid][order]
     n = len(wl)
-    i = 0
-    while i < n:
-        if not in_range[i]:
-            i += 1
-            continue
-        # Found start of a segment; find where it began (interpolate if possible)
-        if i > 0 and np.isfinite(g[i - 1]) and not in_range[i - 1]:
-            # Entering from below or above
-            threshold = ng_lo if g[i] > g[i - 1] else ng_hi
-            wl_start = interp_cross(wl[i - 1], wl[i], g[i - 1], g[i], threshold)
-            if wl_start is None:
-                wl_start = wl[i]
-        else:
-            wl_start = wl[i]
 
-        # Advance to end of segment
-        j = i
-        while j < n and in_range[j]:
-            j += 1
+    best_i, best_j = 0, 0
+    best_bw = 0.0
 
-        # Interpolate exit crossing
-        if j < n and np.isfinite(g[j]) and not in_range[j]:
-            threshold = ng_hi if g[j] > g[j - 1] else ng_lo
-            wl_end = interp_cross(wl[j - 1], wl[j], g[j - 1], g[j], threshold)
-            if wl_end is None:
-                wl_end = wl[j - 1]
-        else:
-            wl_end = wl[j - 1]
+    for i in range(n):
+        g_min = g[i]
+        g_max = g[i]
+        for j in range(i + 1, n):
+            g_min = min(g_min, g[j])
+            g_max = max(g_max, g[j])
+            if g_max - g_min > delta_ng:
+                break
+            bw = wl[j] - wl[i]
+            if bw > best_bw and (j - i + 1) >= min_points:
+                best_bw = bw
+                best_i = i
+                best_j = j
 
-        bw = abs(wl_end - wl_start)
-        if bw > max_bw:
-            max_bw = bw
+    if best_bw <= 0:
+        return dict(bw=0.0, ng_mean=np.nan, ng_min=np.nan, ng_max=np.nan,
+                    wl_center=np.nan, wl_range=(np.nan, np.nan))
 
-        i = j
+    region_ng = g[best_i:best_j + 1]
+    region_wl = wl[best_i:best_j + 1]
 
-    return max_bw
+    return dict(
+        bw=float(best_bw),
+        ng_mean=float(np.mean(region_ng)),
+        ng_min=float(np.min(region_ng)),
+        ng_max=float(np.max(region_ng)),
+        wl_center=float((region_wl[0] + region_wl[-1]) / 2),
+        wl_range=(float(region_wl[0]), float(region_wl[-1])),
+    )
 
 
 def detect_slow_light_band(freqs, k_x, a_nm,
                             target_ng=TARGET_NG,
                             wl_min=WL_MIN, wl_max=WL_MAX):
-    """Auto-detect the band index that best shows slow light near target_ng.
+    """Auto-detect the band index with the best flat ng region.
 
-    Score = bandwidth(ng in [NG_LOW, NG_HIGH]) - 0.5 * |ng_median - target_ng|.
+    Uses find_flat_ng_region to identify the flat bottom/plateau of ng(λ).
+    Score = flat_bandwidth - 2.0 * |ng_mean - target_ng|.
     Returns band index (0-based). Falls back to 0 if no suitable band found.
     """
     num_bands = freqs.shape[1]
@@ -434,10 +439,11 @@ def detect_slow_light_band(freqs, k_x, a_nm,
         if np.sum(mask) < 3:
             continue
 
-        ng_m = np.clip(ng[mask], 0, 200)
-        bw = compute_slow_light_bandwidth(ng_m, wl[mask])
-        ng_med = float(np.nanmedian(ng_m))
-        score = bw - 0.5 * abs(ng_med - target_ng)
+        flat = find_flat_ng_region(ng[mask], wl[mask])
+        if flat['bw'] <= 0:
+            continue
+
+        score = flat['bw'] - 2.0 * abs(flat['ng_mean'] - target_ng)
 
         if score > best_score:
             best_score = score
@@ -450,7 +456,9 @@ def compute_fom(data, target_ng=TARGET_NG, ng_lo=NG_LOW, ng_hi=NG_HIGH,
                 band_override=None):
     """Compute figure of merit for one MPB result.
 
-    FOM = bandwidth (nm) where ng_lo <= ng <= ng_hi on the best slow-light band.
+    FOM = flat-region bandwidth (nm) on the best slow-light band.
+    The flat region is found by find_flat_ng_region (widest contiguous
+    wavelength range where ng variation <= 1.0).
 
     Returns dict: fom, bandwidth_nm, band, ng_mean, ng_median, wl_center,
                   wl_range, meets_target, params.
@@ -471,20 +479,12 @@ def compute_fom(data, target_ng=TARGET_NG, ng_lo=NG_LOW, ng_hi=NG_HIGH,
     ng_win = np.clip(ng[mask], 0, 200)
     wl_win = wl[mask]
 
-    bw = compute_slow_light_bandwidth(ng_win, wl_win, ng_lo, ng_hi)
-
-    in_sl = (ng_win >= ng_lo) & (ng_win <= ng_hi)
-    if np.any(in_sl):
-        ng_mean   = float(np.nanmean(ng_win[in_sl]))
-        ng_median = float(np.nanmedian(ng_win[in_sl]))
-        wl_sl     = wl_win[in_sl]
-        wl_center = float((wl_sl.min() + wl_sl.max()) / 2)
-        wl_range  = (float(wl_sl.min()), float(wl_sl.max()))
-    else:
-        ng_mean   = float(np.nanmedian(ng_win)) if len(ng_win) > 0 else float('nan')
-        ng_median = ng_mean
-        wl_center = float('nan')
-        wl_range  = (float('nan'), float('nan'))
+    flat = find_flat_ng_region(ng_win, wl_win)
+    bw = flat['bw']
+    ng_mean = flat['ng_mean']
+    ng_median = flat['ng_mean']  # same for flat region
+    wl_center = flat['wl_center']
+    wl_range = flat['wl_range']
 
     meets_target = (bw > MIN_BW_NM) and (ng_lo <= ng_mean <= ng_hi)
 
@@ -494,6 +494,8 @@ def compute_fom(data, target_ng=TARGET_NG, ng_lo=NG_LOW, ng_hi=NG_HIGH,
         band=band,
         ng_mean=ng_mean,
         ng_median=ng_median,
+        ng_min=flat['ng_min'],
+        ng_max=flat['ng_max'],
         wl_center=wl_center,
         wl_range=wl_range,
         meets_target=meets_target,
@@ -810,13 +812,18 @@ def plot_bands_and_ng(data, best_band=None, save_path=None, show=True):
     ax2.axhline(TARGET_NG, color='green', ls='--', lw=1.0, label=f'ng={TARGET_NG}')
     ax2.axvline(WL_CENTER, color='blue', ls='--', lw=0.8, label=f'{WL_CENTER:.0f}nm')
 
-    # Annotate bandwidth
+    # Annotate flat-region bandwidth
     fom = compute_fom(data, band_override=best_band)
     bw = fom['fom']
-    if bw > 0:
+    if bw > 0 and np.isfinite(fom['wl_center']):
         wl_lo, wl_hi = fom['wl_range']
-        ax2.axvspan(wl_lo, wl_hi, alpha=0.12, color='green')
-        ax2.text(0.05, 0.95, f'BW = {bw:.1f} nm\nng_mean = {fom["ng_mean"]:.1f}',
+        ax2.axvspan(wl_lo, wl_hi, alpha=0.15, color='yellow',
+                    label=f'Flat region')
+        ng_min = fom.get('ng_min', fom['ng_mean'])
+        ng_max = fom.get('ng_max', fom['ng_mean'])
+        ax2.text(0.05, 0.95,
+                 f'Flat BW = {bw:.1f} nm\n'
+                 f'ng = {fom["ng_mean"]:.2f} [{ng_min:.1f}, {ng_max:.1f}]',
                  transform=ax2.transAxes, va='top', fontsize=9,
                  bbox=dict(boxstyle='round', fc='white', alpha=0.8))
 
