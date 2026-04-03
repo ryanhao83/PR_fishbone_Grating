@@ -853,14 +853,24 @@ def main():
     parser = argparse.ArgumentParser(
         description='Band unfolding post-processing for MPB results')
     parser.add_argument('--analyze-3d', action='store_true',
-                        help='Analyze 3D cached results')
+                        help='Analyze 3D cached results with Tier 1 unfolding')
+    parser.add_argument('--field-overlap', action='store_true',
+                        help='Use Tier 2 field-overlap tracking (runs live MPB)')
+    parser.add_argument('--plot-fields', type=float, default=None, metavar='K',
+                        help='Plot mode fields at given k-point (e.g. --plot-fields 0.40)')
+    parser.add_argument('--structure', type=int, default=None, metavar='IDX',
+                        help='Only process structure IDX (0-based)')
+    parser.add_argument('--resolution', type=int, default=16,
+                        help='MPB resolution for live runs (default: 16)')
+    parser.add_argument('--num-bands', type=int, default=6,
+                        help='Number of bands for live runs (default: 6)')
     parser.add_argument('--save-plots', action='store_true',
                         help='Save plots to output/')
     parser.add_argument('--no-show', action='store_true',
                         help='Do not display plots interactively')
     args = parser.parse_args()
 
-    if not args.analyze_3d:
+    if not (args.analyze_3d or args.field_overlap or args.plot_fields is not None):
         parser.print_help()
         return
 
@@ -877,7 +887,81 @@ def main():
 
     print(f"Loaded {len(all_data)} cached 3D results\n")
 
+    # --- Mode field plot at a single k-point ---
+    if args.plot_fields is not None:
+        for idx, data in enumerate(all_data):
+            if args.structure is not None and idx != args.structure:
+                continue
+            p = data['params']
+            a = p['a_nm']
+            print(f"Structure {idx}: plotting mode fields at k={args.plot_fields:.4f}")
+            save_path = None
+            if args.save_plots:
+                save_path = os.path.join(
+                    output_dir,
+                    f"mode_fields_{idx}_k{args.plot_fields:.3f}.png")
+            plot_mode_fields(p, args.plot_fields,
+                             num_bands=args.num_bands,
+                             resolution=args.resolution,
+                             save_path=save_path,
+                             show=not args.no_show)
+        return
+
+    # --- Tier 2: field-overlap unfolding (live MPB) ---
+    if args.field_overlap:
+        for idx, data in enumerate(all_data):
+            if args.structure is not None and idx != args.structure:
+                continue
+            p = data['params']
+            a = p['a_nm']
+            k_x_cached = data['k_x']
+
+            print(f"{'='*70}")
+            print(f"Structure {idx}: a={a:.0f}nm (Tier 2 field-overlap)")
+
+            freqs_raw, freqs_uf, k_x, swap_log = unfold_bands_field_overlap(
+                p, k_x_cached,
+                num_bands=args.num_bands,
+                resolution=args.resolution)
+
+            # Trim + analyze
+            freqs_trimmed = trim_above_light_cone(freqs_uf, k_x, N_SIO2)
+            analysis = analyze_unfolded(freqs_trimmed, k_x, a)
+
+            print(f"\n  Swap log ({len(swap_log)} k-points with band swaps):")
+            for ki, swaps in swap_log[:10]:
+                print(f"    k[{ki}]={k_x[ki]:.4f}: {swaps}")
+
+            print(f"\n  Slow-light bands (Tier 2):")
+            for r in analysis:
+                sm_str = "SINGLE-MODE" if r['single_mode'] else "MULTIMODE"
+                print(f"    Band {r['band']}: BW={r['bw']:.1f}nm  "
+                      f"ng={r['ng_mean']:.2f}  → {sm_str}")
+
+            # Compare with Tier 1
+            freqs_uf_t1, acs_t1 = unfold_bands(freqs_raw, k_x)
+            n_diff = 0
+            for b in range(freqs_uf.shape[1]):
+                if not np.allclose(freqs_uf_t1[:, b], freqs_uf[:, b], atol=1e-6):
+                    n_diff += 1
+            print(f"\n  Tier 1 vs Tier 2: {n_diff}/{freqs_uf.shape[1]} bands differ")
+
+            # Plot (using Tier 2 unfolded data)
+            show = not args.no_show
+            save_path = None
+            if args.save_plots:
+                save_path = os.path.join(
+                    output_dir,
+                    f"unfolded_3d_{idx}_a{a:.0f}nm_tier2.png")
+            plot_unfolded(data, freqs_uf, freqs_trimmed, analysis, [],
+                          save_path=save_path, show=show)
+            print()
+        return
+
+    # --- Standard Tier 1 analysis ---
     for idx, data in enumerate(all_data):
+        if args.structure is not None and idx != args.structure:
+            continue
         p = data['params']
         a = p['a_nm']
         freqs_te = data['freqs_te']

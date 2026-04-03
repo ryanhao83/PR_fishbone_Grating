@@ -39,17 +39,17 @@ N_SIO2    = 1.44    # SiO2 cladding/substrate
 T_SLAB_NM = 211.0   # poly-Si slab thickness (nm)
 
 # Simulation defaults
-RESOLUTION = 16     # 3D is expensive; 16 for survey, 32 for production
-NUM_BANDS  = 6      # fewer modes needed in 3D
+RESOLUTION = 32     # 3D is expensive; 16 for survey, 32 for production
+NUM_BANDS  = 8      # fewer modes needed in 3D
 K_MIN      = 0.35   # wider k range for 3D (bands shift)
 K_MAX      = 0.50
-K_INTERP   = 30
+K_INTERP   = 50
 PAD_Y      = 3.0    # supercell padding in y (units of a)
 PAD_Z      = 2.0    # supercell padding in z (units of a)
 
 # Slow-light analysis
-TARGET_NG  = 6.0
-NG_LOW     = 5.0
+TARGET_NG  = 6.5
+NG_LOW     = 6.0
 NG_HIGH    = 7.0
 WL_MIN     = 1400.0
 WL_MAX     = 1700.0
