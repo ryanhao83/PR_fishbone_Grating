@@ -37,6 +37,7 @@ import numpy as np
 N_POLY_SI = 3.48    # poly-Si refractive index at 1550nm
 N_SIO2    = 1.44    # SiO2 cladding/substrate
 T_SLAB_NM = 211.0   # poly-Si slab thickness (nm)
+T_PARTIAL_NM = 71.0 # Partial etch background Si layer thickness (nm)
 
 # Simulation defaults
 RESOLUTION = 32     # 3D is expensive; 16 for survey, 32 for production
@@ -159,6 +160,14 @@ def build_geometry_3d(params):
                  material=Si)
     )
 
+    # Partial etch layer (continuous Si background at the bottom of the slab)
+    t_partial = T_PARTIAL_NM / params['a_nm']
+    geometry.append(
+        mp.Block(size=mp.Vector3(mp.inf, mp.inf, t_partial),
+                 center=mp.Vector3(0, 0, -t_slab / 2.0 + t_partial / 2.0),
+                 material=Si)
+    )
+
     return lattice, geometry, sy, sz, t_slab
 
 
@@ -253,11 +262,11 @@ def run_mpb_3d(params, k_min=K_MIN, k_max=K_MAX, k_interp=K_INTERP,
     print(f"  Resolution={resolution}, bands={num_bands}, k={len(k_points)} pts")
     print(f"{'='*70}")
 
-    # TE-like (fundamental guided mode of symmetric slab):
-    # Ey is even under z -> -z reflection => z-even sector.
-    # For SiO2/poly-Si/SiO2 symmetric cladding, this is exact.
-    print("  Running TE-like (z-even)...")
-    ms.run_zeven()
+    # TE-like and TM-like are mixed due to the asymmetric 71nm partial etch layer.
+    # Ey is no longer strictly even under z-reflection. 
+    # Therefore, we must use ms.run() instead of ms.run_zeven() to compute all guided modes.
+    print("  Running with no z-symmetry (partial etch breaks z-even)...")
+    ms.run()
     freqs_te = np.array(ms.all_freqs)
 
     # TM bands not needed for single-mode TE verification;
