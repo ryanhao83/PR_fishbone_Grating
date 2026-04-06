@@ -40,13 +40,13 @@ T_SLAB_NM = 211.0   # poly-Si slab thickness (nm)
 T_PARTIAL_NM = 71.0 # Partial etch background Si layer thickness (nm)
 
 # Simulation defaults
-RESOLUTION = 32     # 3D is expensive; 16 for survey, 32 for production
-NUM_BANDS  = 16     # increased to 16 since we compute both TE and TM modes without parity
+RESOLUTION = 16     # 3D is expensive; 16 for survey, 32 for production
+NUM_BANDS  = 6     # increased to 16 since we compute both TE and TM modes without parity
 K_MIN      = 0.35   # wider k range for 3D (bands shift)
 K_MAX      = 0.50
-K_INTERP   = 50
-PAD_Y      = 3.0    # supercell padding in y (units of a)
-PAD_Z      = 2.0    # supercell padding in z (units of a)
+K_INTERP   = 30
+PAD_Y      = 2.0    # supercell padding in y (units of a)
+PAD_Z      = 1.0    # supercell padding in z (units of a)
 
 # Slow-light analysis
 TARGET_NG  = 6.5
@@ -71,19 +71,19 @@ def get_structures():
         dict(
             label="Rank 1-3 (a=389nm, wl=1549nm, 2D BW=61nm)",
             a_nm=389.0, h_spine=0.550,
-            Wt=0.484, ht=0.514, Wb=0.569, hb=0.735,
+            Wt=0.484, ht=0.514, Wb=0.484, hb=0.514,
             delta_s=0.0,
         ),
         dict(
             label="Rank 4 (a=380nm, wl=1514nm, 2D BW=60nm)",
             a_nm=380.0, h_spine=0.550,
-            Wt=0.484, ht=0.514, Wb=0.569, hb=0.735,
+            Wt=0.569, ht=0.514, Wb=0.569, hb=0.514,
             delta_s=0.0,
         ),
         dict(
             label="Rank 5 (a=380nm, wl=1510nm, 2D BW=60nm)",
             a_nm=380.0, h_spine=0.550,
-            Wt=0.468, ht=0.514, Wb=0.550, hb=0.735,
+            Wt=0.468, ht=0.514, Wb=0.468, hb=0.514,
             delta_s=0.0,
         ),
     ]
@@ -265,29 +265,36 @@ def run_mpb_3d(params, k_min=K_MIN, k_max=K_MAX, k_interp=K_INTERP,
     print(f"{'='*70}")
 
     print("  Running with no z-symmetry (partial etch breaks z-mirror)...")
-    ms.run()
-    all_freqs = np.array(ms.all_freqs)  # shape (num_k, num_bands)
-    num_k, nb = all_freqs.shape
+    print("  Running k-point by k-point to extract mode polarization...")
+    num_k = len(k_points)
+    nb = num_bands
 
+    all_freqs = np.zeros((num_k, nb))
+    te_frac = np.zeros((num_k, nb))
     k_x = np.array([k.x for k in k_points])
 
-    # --- Classify each mode as TE-like or TM-like via E-field overlap ---
-    print("  Computing TE fraction for each band at each k-point...")
-    te_frac = np.zeros((num_k, nb))
+    for ik, k in enumerate(k_points):
+        ms.k_points = [k]
+        ms.run()
 
-    for ik in range(num_k):
+        all_freqs[ik, :] = ms.all_freqs[0]
+
         for ib in range(nb):
-            ms.get_efield(ib + 1, False)  # band index is 1-based in MPB
-            efield = np.array(ms.get_efield(ib + 1, False))
-            # efield shape: (nx, ny, nz, 3) — last axis is (Ex, Ey, Ez)
-            Ex = efield[..., 0]
-            Ey = efield[..., 1]
-            Ez = efield[..., 2]
-            energy_total = np.sum(np.abs(Ex)**2 + np.abs(Ey)**2 + np.abs(Ez)**2)
-            if energy_total > 0:
-                te_frac[ik, ib] = 1.0 - np.sum(np.abs(Ez)**2) / energy_total
+            # Use MPB's built-in field energy decomposition (robust).
+            # get_dfield loads D for band (ib+1), then compute_field_energy
+            # returns [total, x_energy, y_energy, z_energy, xy, xz, yz].
+            ms.get_dfield(ib + 1)
+            energy = ms.compute_field_energy()
+            # energy[0] = total, energy[1..3] = Ex, Ey, Ez fractions
+            total = energy[0]
+            if total > 0:
+                ez_frac = energy[3] / total
+                te_frac[ik, ib] = 1.0 - ez_frac
             else:
                 te_frac[ik, ib] = np.nan
+
+        if (ik + 1) % 10 == 0 or ik == num_k - 1:
+            print(f"    k-point {ik+1}/{num_k} done")
 
     # Split into TE and TM arrays, padding with NaN where band doesn't belong
     freqs_te = np.where(te_frac > 0.7, all_freqs, np.nan)
