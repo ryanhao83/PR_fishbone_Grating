@@ -1,0 +1,289 @@
+# ──────────────────────────────────────────────────────────────────────
+# Lumerical FDTD script: 71nm partial-etch fishbone grating ng verification
+# Equivalent to fdtd_71nm_sim.py (Meep version)
+# ──────────────────────────────────────────────────────────────────────
+
+switchtolayout;
+deleteall;
+
+# ── Physical / geometry parameters (match run_71nm_yeven.py) ─────────
+a       = 496e-9;        # lattice constant [m]
+h_spine = 0.550 * a;     # half-width of central spine [m]
+W_rib   = 0.484 * a;     # rib length along x [m]
+h_rib   = 0.514 * a;     # rib width along y [m]
+t_slab  = 211e-9;        # full Si slab thickness [m]
+t_partial = 71e-9;       # partial etch depth (continuous layer) [m]
+
+# ── Simulation parameters ────────────────────────────────────────────
+NUM_PERIODS = 40;
+USE_TAPER   = 0;          # 0 = off, 1 = on (period chirp)
+N_TAPER     = 3;
+a_min_frac  = 0.85;       # smallest period fraction for taper
+
+L_STRIP     = 5 * a;      # strip waveguide length before grating
+SRC_OFFSET  = 2 * a;      # source distance from left PML
+MON_IN_OFFSET  = 2 * a;   # input monitor offset into grating
+MON_OUT_OFFSET = 2 * a;   # output monitor offset from grating end
+
+RESOLUTION  = 32;          # target mesh: a/RESOLUTION per cell
+mesh_dx     = a / RESOLUTION;
+
+PAD_Y   = 1.5 * a;
+PAD_Z   = 1.0 * a;
+PML_THICK = 1.0 * a;
+
+# Pulse wavelength range
+lambda_min = 1508e-9;
+lambda_max = 1549e-9;
+lambda_cen = (lambda_min + lambda_max) / 2;
+
+RUN_TIME = 1200 * a / 3e8;   # convert Meep time units to seconds (t_meep * a/c)
+
+# ── Compute period array (with optional taper) ───────────────────────
+period_a = matrix(NUM_PERIODS);
+for (i = 1:NUM_PERIODS) {
+    if (USE_TAPER) {
+        if (i <= N_TAPER) {
+            alpha = i / (N_TAPER + 1);
+            period_a(i) = a * (a_min_frac + (1 - a_min_frac) * alpha);
+        } else if (i > NUM_PERIODS - N_TAPER) {
+            alpha = (NUM_PERIODS - i + 1) / (N_TAPER + 1);
+            period_a(i) = a * (a_min_frac + (1 - a_min_frac) * alpha);
+        } else {
+            period_a(i) = a;
+        }
+    } else {
+        period_a(i) = a;
+    }
+}
+total_grating_length = sum(period_a);
+
+# ── Layout coordinates ───────────────────────────────────────────────
+#
+# |<PML>|<-- strip wg -->|<====== grating ======>|<PML>|
+#        ^src             ^grating_start    grating_end^
+#                              ^mon1     mon2^
+
+sx = PML_THICK + L_STRIP + total_grating_length + PML_THICK;
+sy = 2 * (h_spine + h_rib + PAD_Y) + 2 * PML_THICK;
+sz = t_slab + 2 * PAD_Z + 2 * PML_THICK;
+
+strip_left    = -sx/2 + PML_THICK;
+grating_start = strip_left + L_STRIP;
+grating_end   = grating_start + total_grating_length;
+
+# Period centres (cumulative)
+period_x_cen = matrix(NUM_PERIODS);
+x_cursor = grating_start;
+for (i = 1:NUM_PERIODS) {
+    period_x_cen(i) = x_cursor + period_a(i) / 2;
+    x_cursor = x_cursor + period_a(i);
+}
+
+src_x  = strip_left + SRC_OFFSET;
+mon1_x = grating_start + MON_IN_OFFSET;
+mon2_x = grating_end   - MON_OUT_OFFSET;
+
+total_wg_length = L_STRIP + total_grating_length;
+wg_centre_x = (strip_left + grating_end) / 2;
+
+?"Cell size: " + num2str(sx*1e6) + " x " + num2str(sy*1e6) + " x " + num2str(sz*1e6) + " um";
+?"Source at x = " + num2str(src_x*1e6) + " um";
+?"Mon1 at x = " + num2str(mon1_x*1e6) + " um";
+?"Mon2 at x = " + num2str(mon2_x*1e6) + " um";
+?"L_mon = " + num2str((mon2_x - mon1_x)*1e6) + " um";
+
+# ══════════════════════════════════════════════════════════════════════
+#                           FDTD REGION
+# ══════════════════════════════════════════════════════════════════════
+addfdtd;
+set("x", 0);
+set("x span", sx);
+set("y", 0);
+set("y span", sy);
+set("z", 0);
+set("z span", sz);
+set("mesh type", "custom non-uniform");
+set("dx", mesh_dx);
+set("dy", mesh_dx);
+set("dz", mesh_dx);
+set("simulation time", RUN_TIME);
+set("x min bc", "PML");
+set("x max bc", "PML");
+set("y min bc", "Anti-Symmetric");   # Ey is odd under y-mirror
+set("y max bc", "PML");
+set("z min bc", "PML");
+set("z max bc", "Symmetric");        # TE-like: even under z-mirror
+set("pml layers", round(PML_THICK / mesh_dx));
+
+# ══════════════════════════════════════════════════════════════════════
+#                           GEOMETRY
+# ══════════════════════════════════════════════════════════════════════
+
+# ── SiO2 substrate (below slab) ──────────────────────────────────────
+addrect;
+set("name", "SiO2_substrate");
+set("material", "SiO2 (Glass) - Palik");
+set("x", 0); set("x span", sx + 2*PML_THICK);
+set("y", 0); set("y span", sy + 2*PML_THICK);
+set("z min", -sz/2);
+set("z max", -t_slab/2);
+
+# ── SiO2 top cladding (above slab) ──────────────────────────────────
+addrect;
+set("name", "SiO2_cladding");
+set("material", "SiO2 (Glass) - Palik");
+set("x", 0); set("x span", sx + 2*PML_THICK);
+set("y", 0); set("y span", sy + 2*PML_THICK);
+set("z min", t_slab/2);
+set("z max", sz/2);
+
+# ── Continuous partial-etch Si layer (71 nm, bottom of slab) ─────────
+addrect;
+set("name", "Si_partial_etch");
+set("material", "Si (Silicon) - Palik");
+set("x", wg_centre_x);
+set("x span", total_wg_length);
+set("y", 0);
+set("y span", sy);  # spans full y
+set("z min", -t_slab/2);
+set("z max", -t_slab/2 + t_partial);
+
+# ── Continuous spine (strip wg + grating, full slab) ─────────────────
+addrect;
+set("name", "spine");
+set("material", "Si (Silicon) - Palik");
+set("x", wg_centre_x);
+set("x span", total_wg_length);
+set("y", 0);
+set("y span", 2 * h_spine);
+set("z", 0);
+set("z span", t_slab);
+
+# ── Grating ribs ─────────────────────────────────────────────────────
+for (i = 1:NUM_PERIODS) {
+    xc = period_x_cen(i);
+
+    # +y rib
+    addrect;
+    set("name", "rib_top_" + num2str(i));
+    set("material", "Si (Silicon) - Palik");
+    set("x", xc);
+    set("x span", W_rib);
+    set("y", h_spine + h_rib/2);
+    set("y span", h_rib);
+    set("z", 0);
+    set("z span", t_slab);
+
+    # -y rib
+    addrect;
+    set("name", "rib_bot_" + num2str(i));
+    set("material", "Si (Silicon) - Palik");
+    set("x", xc);
+    set("x span", W_rib);
+    set("y", -(h_spine + h_rib/2));
+    set("y span", h_rib);
+    set("z", 0);
+    set("z span", t_slab);
+}
+
+# ══════════════════════════════════════════════════════════════════════
+#                             SOURCE
+# ══════════════════════════════════════════════════════════════════════
+# Mode source on strip waveguide — excites fundamental TE mode
+addmode;
+set("name", "mode_src");
+set("injection axis", "x-axis");
+set("direction", "Forward");
+set("x", src_x);
+set("y", 0);
+set("y span", 2 * h_spine + 0.2*a);
+set("z", 0);
+set("z span", t_slab + 0.2*a);
+set("wavelength start", lambda_min);
+set("wavelength stop", lambda_max);
+set("mode selection", "fundamental TE mode");
+
+# ══════════════════════════════════════════════════════════════════════
+#                           MONITORS
+# ══════════════════════════════════════════════════════════════════════
+
+# ── Time monitor 1 (input, inside grating) ───────────────────────────
+addtime;
+set("name", "time_mon1");
+set("monitor type", "point");
+set("x", mon1_x);
+set("y", 0);
+set("z", 0);
+
+# ── Time monitor 2 (output, inside grating) ──────────────────────────
+addtime;
+set("name", "time_mon2");
+set("monitor type", "point");
+set("x", mon2_x);
+set("y", 0);
+set("z", 0);
+
+# ── Flux monitor 1 (input) ───────────────────────────────────────────
+addpower;
+set("name", "flux_in");
+set("monitor type", "2D X-normal");
+set("x", mon1_x);
+set("y", 0);
+set("y span", 2 * h_spine + 0.2*a);
+set("z", 0);
+set("z span", t_slab + 0.2*a);
+set("override global monitor settings", 1);
+set("frequency points", 200);
+set("use wavelength spacing", 1);
+set("minimum wavelength", lambda_min);
+set("maximum wavelength", lambda_max);
+
+# ── Flux monitor 2 (output) ──────────────────────────────────────────
+addpower;
+set("name", "flux_out");
+set("monitor type", "2D X-normal");
+set("x", mon2_x);
+set("y", 0);
+set("y span", 2 * h_spine + 0.2*a);
+set("z", 0);
+set("z span", t_slab + 0.2*a);
+set("override global monitor settings", 1);
+set("frequency points", 200);
+set("use wavelength spacing", 1);
+set("minimum wavelength", lambda_min);
+set("maximum wavelength", lambda_max);
+
+# ── Field profile monitor (z=0 plane, for movie) ─────────────────────
+addprofile;
+set("name", "field_xy");
+set("monitor type", "2D Z-normal");
+set("x", 0);
+set("x span", sx - 2*PML_THICK);
+set("y", 0);
+set("y span", sy - 2*PML_THICK);
+set("z", 0);
+set("override global monitor settings", 1);
+set("frequency points", 1);
+set("use source limits", 1);
+
+# ── Movie monitor (Ey at z=0) ────────────────────────────────────────
+addmovie;
+set("name", "Ey_movie");
+set("monitor type", "2D Z-normal");
+set("x", 0);
+set("x span", sx - 2*PML_THICK);
+set("y", 0);
+set("y span", sy - 2*PML_THICK);
+set("z", 0);
+
+# ══════════════════════════════════════════════════════════════════════
+?"Setup complete.";
+?"  Grating: " + num2str(NUM_PERIODS) + " periods, a = " + num2str(a*1e9) + " nm";
+?"  Slab: " + num2str(t_slab*1e9) + " nm Si, partial etch: " + num2str(t_partial*1e9) + " nm";
+?"  Spine full width: " + num2str(2*h_spine*1e9) + " nm";
+?"  Rib: " + num2str(W_rib*1e9) + " x " + num2str(h_rib*1e9) + " nm";
+?"  Wavelength: " + num2str(lambda_min*1e9) + " – " + num2str(lambda_max*1e9) + " nm";
+?"  Mesh: " + num2str(mesh_dx*1e9) + " nm";
+?"";
+?"To run: click Run, then use fdtd_71nm_lumerical_postprocess.lsf for analysis.";

@@ -1,0 +1,6 @@
+simplified_structure/output/yeven_71nm_modes_data.npz
+simplified_structure/output/yeven_140nm_modes_data.npz
+.DS_Store
+__pycache__/
+cache_3d/
+*.npz

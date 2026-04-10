@@ -6,10 +6,21 @@ import numpy as np
 import meep as mp
 import meep.mpb as mpb
 
-from sweep_ysym_partial_etch import (
-    T_SLAB_NM, N_POLY_SI, N_SIO2, PAD_Y, PAD_Z,
-    K_MIN, K_MAX, K_INTERP
-)
+
+N_POLY_SI   = 3.48
+N_SIO2      = 1.44
+T_SLAB_NM   = 211.0
+
+RESOLUTION  = 32
+NUM_BANDS   = 9
+K_MIN       = 0.46
+K_MAX       = 0.50
+K_INTERP    = 45
+PAD_Y       = 2.0
+PAD_Z       = 1.5
+
+
+
 BASE_PARAMS = dict(
     a_nm=496.0, h_spine=0.550,
     W_rib=0.484, h_rib=0.514,   # single rib size (both sides identical)
@@ -161,12 +172,90 @@ def plot_bands(data, out_path):
     print(f"Saved plot to {out_path}")
     # plt.show() # prevent blocking in terminal
 
+def get_fields_at_k(params, k_val, resolution, target_bands):
+    import meep as mp
+    import meep.mpb as mpb
+    import numpy as np
+
+    lattice, geometry, sy, sz, t_slab = build_geometry_ysym_71nm(params)
+    k_points = [mp.Vector3(k_val)]
+    
+    max_band = max(target_bands) if target_bands else 1
+
+    ms = mpb.ModeSolver(
+        geometry_lattice=lattice,
+        geometry=geometry,
+        k_points=k_points,
+        resolution=resolution,
+        num_bands=max_band,
+    )
+    print(f"\nSolving modes at k={k_val} for field extraction (71nm)...")
+    ms.run_yeven()
+    
+    efields = []
+    all_freqs = np.array(ms.all_freqs)[0, :]
+    freqs = []
+    
+    for b in target_bands:
+        if b <= max_band:
+            ms.get_efield(b, False)
+            ef = np.array(ms.get_efield(b, False))
+            efields.append(ef)
+            freqs.append(all_freqs[b-1])
+    
+    return efields, freqs, sy, sz
+
+def plot_modal_fields(efields, freqs, k_val, a_nm, sy, sz, target_bands, out_path):
+    import matplotlib.pyplot as plt
+    import numpy as np
+
+    nb = len(efields)
+    fig, axes = plt.subplots(nb, 3, figsize=(10, 2.5 * nb))
+    if nb == 1:
+        axes = axes[np.newaxis, :]
+
+    comp_labels = ['|Ex|² (TE_y)', '|Ey|² (TE_x)', '|Ez|² (TM)']
+
+    for ib in range(nb):
+        ef = efields[ib]
+        nx = ef.shape[0]
+        x_mid = nx // 2
+        band_index = target_bands[ib]
+
+        for ic in range(3):
+            ax = axes[ib, ic]
+            field_slice = np.abs(ef[x_mid, :, :, ic])**2
+            im = ax.imshow(field_slice.T, origin='lower', cmap='hot',
+                           aspect='auto',
+                           extent=[-sy/2, sy/2, -sz/2, sz/2])
+            if ic == 0:
+                f_val = freqs[ib]
+                wl = a_nm / f_val if f_val > 0 else 0
+                ax.set_ylabel(f'Band {band_index}\nf={f_val:.4f}\nwl={wl:.0f}nm',
+                              fontsize=10, rotation=0, labelpad=60,
+                              va='center')
+            if ib == 0:
+                ax.set_title(comp_labels[ic])
+            if ib == nb - 1:
+                ax.set_xlabel('y (a)')
+            else:
+                ax.set_xticklabels([])
+            plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+
+    plt.suptitle(f"Mode Fields at k={k_val} (a={a_nm}nm, hsi=71nm)", fontsize=14)
+    plt.tight_layout(rect=[0, 0, 1, 0.98])
+    plt.savefig(out_path, dpi=200)
+    print(f"Saved mode fields plot to {out_path}")
+    plt.close(fig)
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--resolution', type=int, default=16)
-    parser.add_argument('--num-bands', type=int, default=30)
+    parser.add_argument('--resolution', type=int, default=32)
+    parser.add_argument('--num-bands', type=int, default=8)
     parser.add_argument('--save-plots', action='store_true')
     parser.add_argument('--save-data', action='store_true')
+    parser.add_argument('--plot-modes', action='store_true', help='Plot mode fields at specific k points')
+    parser.add_argument('--target-bands', type=int, nargs='+', default=[7, 8], help='Target bands to plot/save for mode fields')
     parser.add_argument('--k-min', type=float, default=K_MIN)
     parser.add_argument('--k-max', type=float, default=K_MAX)
     parser.add_argument('--k-interp', type=int, default=K_INTERP)
@@ -175,6 +264,28 @@ def main():
     out_dir = os.path.join(os.path.dirname(__file__), 'output')
     os.makedirs(out_dir, exist_ok=True)
     
+    if args.plot_modes:
+        print(f"\n[Mode Plotting Mode] Targeting bands: {args.target_bands}")
+        modes_data = {'target_bands': args.target_bands, 'a_nm': BASE_PARAMS['a_nm']}
+        for k_val in [0.486, 0.495]:
+            efields, freqs, sy, sz = get_fields_at_k(BASE_PARAMS, k_val, args.resolution, args.target_bands)
+            
+            # Save fields to variables
+            modes_data['sy'] = sy
+            modes_data['sz'] = sz
+            modes_data[f'k_{k_val:.3f}_efields'] = efields
+            modes_data[f'k_{k_val:.3f}_freqs'] = freqs
+            
+            plot_path = os.path.join(out_dir, f'yeven_71nm_modes_k{k_val:.3f}.png')
+            plot_modal_fields(efields, freqs, k_val, BASE_PARAMS['a_nm'], sy, sz, args.target_bands, plot_path)
+            
+        if args.save_data:
+            np.savez(os.path.join(out_dir, 'yeven_71nm_modes_data.npz'), **modes_data)
+            print("Saved detailed mode data to yeven_71nm_modes_data.npz.")
+            
+        print("Mode plotting completed.")
+        return  # Skip the full band run if only asking to plot modes
+        
     data = run_mpb_yeven(
         BASE_PARAMS, 
         k_min=args.k_min,
