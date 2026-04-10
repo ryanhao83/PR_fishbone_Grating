@@ -21,7 +21,9 @@ if plot_mode == 'bands':
     # npz = np.load('cache_2d/fishbone2d_hspine0p380_res32_nb19_974a1f09.npz', allow_pickle=True)
     # npz = np.load('cache_2d/fishbone2d_hspine0p400_res32_nb19_1dddb44b.npz', allow_pickle=True)
     # npz = np.load('cache_2d/fishbone2d_hspine0p420_res32_nb19_3ae4efdf.npz', allow_pickle=True)
-    npz = np.load('cache_3d/simplified3d_res32_nb8_d475bf23.npz', allow_pickle=True)
+    #npz = np.load('cache_3d/simplified3d_res32_nb8_764dce3f.npz', allow_pickle=True)
+    npz = np.load('cache_3d/simplified3d_res32_nb8_b877c767.npz', allow_pickle=True)
+    #npz = np.load('cache_3d/simplified3d_res32_nb8_d475bf23.npz', allow_pickle=True)
 
     k       = npz['k_x']                # k 点
     
