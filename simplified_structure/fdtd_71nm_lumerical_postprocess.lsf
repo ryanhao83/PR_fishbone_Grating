@@ -1,0 +1,135 @@
+# ──────────────────────────────────────────────────────────────────────
+# Lumerical post-processing: extract ng from time monitors
+# Run this after fdtd_71nm_lumerical.lsf simulation completes
+# ──────────────────────────────────────────────────────────────────────
+
+a = 496e-9;
+c0 = 3e8;
+
+# ── Load time monitor data ───────────────────────────────────────────
+t1_data = getresult("time_mon1", "Ey");
+t2_data = getresult("time_mon2", "Ey");
+
+t  = t1_data.t;
+Ey_in  = t1_data.Ey;
+Ey_out = t2_data.Ey;
+
+# Monitor positions (read back from simulation)
+mon1_x = getnamed("time_mon1", "x");
+mon2_x = getnamed("time_mon2", "x");
+L_mon = mon2_x - mon1_x;
+
+?"Mon1 x = " + num2str(mon1_x*1e6) + " um";
+?"Mon2 x = " + num2str(mon2_x*1e6) + " um";
+?"L_mon = " + num2str(L_mon*1e6) + " um";
+
+# ── Method 1: Broadband ng from peak delay ───────────────────────────
+# Find envelope peak at each monitor
+env_in  = abs(Ey_in);    # simple |Ey| envelope
+env_out = abs(Ey_out);
+
+idx_peak_in  = find(env_in, max(env_in));
+idx_peak_out = find(env_out, max(env_out));
+
+t_peak_in  = t(idx_peak_in);
+t_peak_out = t(idx_peak_out);
+delta_t = t_peak_out - t_peak_in;
+
+ng_broadband = c0 * delta_t / L_mon;
+
+?"";
+?"=== Broadband Peak Delay ===";
+?"t1 (input peak)  = " + num2str(t_peak_in * 1e12)  + " ps";
+?"t2 (output peak) = " + num2str(t_peak_out * 1e12) + " ps";
+?"delta_t = " + num2str(delta_t * 1e12) + " ps";
+?">>> ng (broadband) = " + num2str(ng_broadband) + " <<<";
+
+# ── Plot time-domain signals ─────────────────────────────────────────
+plot(t*1e12, Ey_in, Ey_out);
+legend("Mon1 (input)", "Mon2 (output)");
+setplot("x label", "Time (ps)");
+setplot("y label", "Ey");
+setplot("title", "Time-domain signals");
+
+# ── Method 2: ng(lambda) via bandpass filtering ──────────────────────
+lambda_min = 1508e-9;
+lambda_max = 1549e-9;
+N_wl = 50;
+bw = 5e-9;   # Gaussian filter FWHM
+
+wl_targets = linspace(lambda_min, lambda_max, N_wl);
+ng_vs_wl = matrix(N_wl);
+
+dt_samp = t(2) - t(1);
+N_pts = length(t);
+freq_fft = linspace(0, 1/(2*dt_samp), floor(N_pts/2)+1);
+
+Ey_in_fft  = fft(Ey_in);
+Ey_out_fft = fft(Ey_out);
+
+# Only take positive frequencies (first half)
+N_half = floor(N_pts/2) + 1;
+Ey_in_fft_pos  = Ey_in_fft(1:N_half);
+Ey_out_fft_pos = Ey_out_fft(1:N_half);
+
+for (i = 1:N_wl) {
+    f_c = c0 / wl_targets(i);
+    sigma_f = c0 / wl_targets(i)^2 * bw / (2 * sqrt(2 * log(2)));
+
+    # Gaussian bandpass
+    gauss = exp(-0.5 * ((freq_fft - f_c) / sigma_f)^2);
+
+    # Filter in freq domain
+    filt_in  = Ey_in_fft_pos  * gauss;
+    filt_out = Ey_out_fft_pos * gauss;
+
+    # Reconstruct full spectrum (conjugate symmetric) and IFFT
+    if (mod(N_pts, 2) == 0) {
+        filt_in_full  = [filt_in;  conj(filt_in(N_half-1:-1:2))];
+        filt_out_full = [filt_out; conj(filt_out(N_half-1:-1:2))];
+    } else {
+        filt_in_full  = [filt_in;  conj(filt_in(N_half:-1:2))];
+        filt_out_full = [filt_out; conj(filt_out(N_half:-1:2))];
+    }
+
+    sig_in_filt  = real(invfft(filt_in_full));
+    sig_out_filt = real(invfft(filt_out_full));
+
+    # Envelope
+    env_in_f  = abs(sig_in_filt);
+    env_out_f = abs(sig_out_filt);
+
+    # Peak times
+    t1_idx = find(env_in_f,  max(env_in_f));
+    t2_idx = find(env_out_f, max(env_out_f));
+
+    dt_peak = t(t2_idx) - t(t1_idx);
+    ng_vs_wl(i) = c0 * dt_peak / L_mon;
+}
+
+# ── Plot ng(lambda) ──────────────────────────────────────────────────
+plot(wl_targets*1e9, ng_vs_wl);
+setplot("x label", "Wavelength (nm)");
+setplot("y label", "Group Index ng");
+setplot("title", "FDTD Group Index (Lumerical)");
+
+# ── Print summary ────────────────────────────────────────────────────
+?"";
+?"=== ng(lambda) Summary ===";
+?"Wavelength range: " + num2str(lambda_min*1e9) + " – " + num2str(lambda_max*1e9) + " nm";
+?"Mean ng = " + num2str(mean(ng_vs_wl));
+?"Std  ng = " + num2str(std(ng_vs_wl));
+?"Min  ng = " + num2str(min(ng_vs_wl));
+?"Max  ng = " + num2str(max(ng_vs_wl));
+
+# ── Load flux data for transmission ──────────────────────────────────
+T_data = getresult("flux_out", "T");
+?"";
+?"Transmission data available in 'flux_out' monitor.";
+
+# ── Export data to .mat for external processing ──────────────────────
+matlabsave("fdtd_71nm_lumerical_results.mat",
+    t, Ey_in, Ey_out,
+    wl_targets, ng_vs_wl, ng_broadband,
+    mon1_x, mon2_x, L_mon);
+?"Saved results to fdtd_71nm_lumerical_results.mat";

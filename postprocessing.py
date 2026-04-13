@@ -8,7 +8,8 @@ if plot_mode == 'bands':
     # Load npz
     # npz = np.load('cache_2d/fishbone2d_hspine0p380_res32_nb19_974a1f09.npz', allow_pickle=True)
     # npz = np.load('cache_2d/fishbone2d_hspine0p400_res32_nb19_1dddb44b.npz', allow_pickle=True)
-    npz = np.load('cache_2d/fishbone2d_hspine0p420_res32_nb19_3ae4efdf.npz', allow_pickle=True)
+    # npz = np.load('cache_2d/fishbone2d_hspine0p420_res32_nb19_3ae4efdf.npz', allow_pickle=True)
+    npz = np.load('cache_3d/simplified3d_res32_nb8_764dce3f.npz', allow_pickle=True)
 
     k       = npz['k_x']                # k 点
     freqs   = npz['freqs_even']          # shape (nk, nb)，所有能带频率
@@ -34,7 +35,7 @@ if plot_mode == 'bands':
     ax.set_title(f"h_spine={info['h_spine']:.2f}a — all {nb} bands")
   
     # 只看某一条带 (例如 band 11)
-    b_group = [10, 15, 16]
+    b_group = [5, 6, 4]
     for b in b_group:
         ax0.plot(k, freqs[:, b], label=f'band {b}')
     ax0.set_xlabel('k (2π/a)') 
